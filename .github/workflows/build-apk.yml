@@ -28,30 +28,43 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      # The runner already has the Android SDK; only the licences need accepting.
+      - name: Accept Android SDK licenses
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKM" ] || SDKM="$(command -v sdkmanager || true)"
+          if [ -x "$SDKM" ]; then yes | "$SDKM" --licenses || true; fi
+          ls "$ANDROID_HOME/licenses" || true
 
       - name: Install JS dependencies
         run: npm install --no-audit --no-fund
 
       - name: Generate the Android project
+        run: npx cap add android
+
+      - name: Apply icon, splash and version number
+        continue-on-error: true
         run: |
-          npx cap add android
-          # original launcher icon, launch background and splash
-          cp -r resources/android/res/. android/app/src/main/res/
-          find android/app/src/main/res -name 'splash.png' -exec cp resources/splash.png {} \;
-          # stable signing key, so every build can update the previous install
-          mkdir -p ~/.android
-          cp signing/debug.keystore ~/.android/debug.keystore
-          # bump the version with every run (handles both `versionCode 1` and `versionCode = 1`)
+          RES=android/app/src/main/res
+          cp -r resources/android/res/mipmap-* "$RES"/
+          BG=$(find resources -name "ic_launcher_background.xml" | head -n 1)
+          if [ -n "$BG" ]; then sed -i 's/>#[0-9A-Fa-f]\{6,8\}</>#14122B</' "$BG"; fi
+          find "$RES" -name 'splash.png' -exec cp resources/splash.png {} \;
           RUN=${{ github.run_number }}
           sed -i "s/versionCode *=* *[0-9]\+/versionCode $RUN/; s/versionName *=* *\"[^\"]*\"/versionName \"1.0.$RUN\"/" android/app/build.gradle
-          grep -n "versionCode\|versionName" android/app/build.gradle
-          chmod +x android/gradlew
-          npx cap sync android
+          grep -n "versionCode\|versionName" android/app/build.gradle || true
+
+      # Same signing key on every build, so a new APK installs over the old one and keeps your drawings.
+      - name: Use the fixed signing key
+        run: |
+          mkdir -p ~/.android
+          cp signing/debug.keystore ~/.android/debug.keystore
 
       - name: Build the APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Name the APK
         run: |
